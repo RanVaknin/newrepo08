@@ -44,30 +44,45 @@ function locationHandler(request, response) {
 
   if (locations[url]) {
     response.send(locations[url]);
-  }
-  else {
-    superagent.get(url)
-      .then(data => {
-        const geoData = data.body;
-        const location = new Location(request.query.data, geoData);
-        locations[url] = location;
+  } else {
+    const value = [request.query.data];
+    const SQL = `
+    SELECT formatted_query, latitude, longitude FROM location_table
+    WHERE search_query LIKE $1;`
+    client.query(SQL, value).then(result => {
+      if(result.rows.length > 0){
+        response.status(200).json(result.rows[0]);
+        locations[url] = {
+          search_query : request.query.data,
+          formatted_query : result.rows[0].formatted_query,
+          latitude : result.rows[0].latitude,
+          longitude : result.rows[0].longitude
+        };
+        return;
+      }
+      superagent.get(url)
+        .then(data => {
+          const geoData = data.body;
+          const location = new Location(request.query.data, geoData);
+          locations[url] = location;
+          const search_query = request.query.data;
+          const formatted_address = geoData.results[0].formatted_address;
+          const latitude = geoData.results[0].geometry.location.lat;
+          const longitude = geoData.results[0].geometry.location.lng;
+          const safeValues = [search_query, formatted_address, latitude, longitude];
 
-        let latitude = geoData.results[0].geometry.location.lat;
-        let longitude = geoData.results[0].geometry.location.lng;
-        let safeValues = [latitude, longitude];
-
-        console.log('SAFE VAUES', safeValues)
-        let SQL = 'INSERT INTO location_table (latitude, longitude) VALUES ($1, $2) RETURNING *';
-        client.query(SQL, safeValues).then(results => {
-          response.status(200).json(results);
-        })
-          .catch(() => {
-            errorHandler('So sorry, something went wrong.', request, response);
+          console.log('SAFE VAUES', safeValues);
+          const SQL = 'INSERT INTO location_table (search_query, formatted_query, latitude, longitude) VALUES ($1, $2, $3, $4) RETURNING *;';
+          client.query(SQL, safeValues).then(result => {
+            const row = result.rows[0];
+            response.status(200).json(row);
+          }).catch((e) => {
+            errorHandler('So sorry, something went wrong.', e, request, response);
           });
-      })
+        });
+    });
   }
 }
-
 function yelpHandler(request, response) {
   const url = `https://api.yelp.com/v3/businesses/search?latitude=${request.query.data.latitude}&longitude=${request.query.data.longitude}`
 
@@ -130,6 +145,7 @@ function notFoundHandler(request, response) {
 }
 
 function errorHandler(error, request, response) {
+  console.error(error);
   response.status(500).send(error);
 }
 
@@ -168,4 +184,5 @@ function Trails(trail) {
 }
 
 // Make sure the server is listening for requests
+client.connect();
 app.listen(PORT, () => console.log(`App is listening on ${PORT}`));
